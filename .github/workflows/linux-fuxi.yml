@@ -75,7 +75,18 @@ jobs:
           git log --oneline -1
           test ! -f .gitmodules
 
+      # The runner is a fresh machine every run, and building llvm/cctools-port from
+      # source costs ~50 minutes. Cache the finished toolchain tree so a re-run after
+      # a later-step failure only pays for the build itself.
+      - name: Restore the host toolchain
+        id: toolchain-cache
+        uses: actions/cache@v4
+        with:
+          path: /opt/unixnu-linux
+          key: unixnu-linux-${{ runner.os }}-${{ hashFiles('unixnu/scripts/linux/setup-toolchain.py') }}
+
       - name: Install host tools
+        if: steps.toolchain-cache.outputs.cache-hit != 'true'
         timeout-minutes: 300
         run: |
           set -x
@@ -90,6 +101,14 @@ jobs:
           date -u
           du -sh /opt/unixnu-linux 2>/dev/null || true
         working-directory: unixnu
+
+      # The apt packages are not cached, so the restored toolchain still needs them.
+      - name: Install the small apt packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential git make cmake ninja-build unifdef lz4 xz-utils \
+            pkg-config libssl-dev device-tree-compiler mtools bzip2 zip
 
       - name: Report the runner toolchain
         run: |
