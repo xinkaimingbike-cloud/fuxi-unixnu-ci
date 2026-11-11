@@ -1,0 +1,132 @@
+name: fuxi kernel (ubuntu)
+
+on:
+  workflow_dispatch:
+    inputs:
+      defconfig:
+        description: Defconfig of the device repository
+        required: true
+        default: fuxi_defconfig
+      steps:
+        description: Steps to build
+        type: choice
+        options:
+          - kernel
+          - kernel payload
+        default: kernel
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-fuxi-${{ github.ref }}-${{ inputs.defconfig }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    env:
+      UNIXNU_DEVICE: ${{ github.workspace }}/device
+      DEFCONFIG: ${{ inputs.defconfig }}
+      STEPS: ${{ inputs.steps }}
+    steps:
+      - name: Check out UniXNU
+        uses: actions/checkout@v4
+        with:
+          repository: UniXNU/UniXNU
+          ref: main
+          path: unixnu
+          submodules: false
+          persist-credentials: false
+
+      - name: Check out this repository
+        uses: actions/checkout@v4
+        with:
+          path: ci
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Unpack the fuxi device repository
+        run: |
+          tar -xzf ci/device-fuxi.tar.gz
+          ls device | head -n 40
+          test -f device/board.toml
+          test -f "device/configs/$DEFCONFIG"
+          grep -n 'Ath12kWifi' device/board.toml
+
+      - name: Install host tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential git make cmake ninja-build unifdef lz4 xz-utils \
+            pkg-config libssl-dev device-tree-compiler mtools bzip2 zip
+          python3 scripts/linux/setup-toolchain.py --print-packages || true
+          sudo python3 scripts/linux/setup-toolchain.py
+        working-directory: unixnu
+
+      - name: Report the runner toolchain
+        run: |
+          uname -a
+          python3 --version
+          for tool in git make clang cmake ninja unifdef ld lzfse dtc; do
+            printf '%-10s %s\n' "$tool" "$(command -v "$tool" || echo MISSING)"
+          done
+          ls -la /opt/unixnu-linux 2>/dev/null | head -n 20
+          df -h "$GITHUB_WORKSPACE"
+        working-directory: unixnu
+
+      - name: Configure
+        run: ./unixnu defconfig "$DEFCONFIG" -D "$UNIXNU_DEVICE"
+        working-directory: unixnu
+
+      - name: Fetch the sources
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: ./unixnu fetch
+        working-directory: unixnu
+
+      - name: Build kernel
+        id: kernel
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: ./unixnu build kernel
+        working-directory: unixnu
+
+      - name: Collect the results
+        if: always()
+        run: |
+          mkdir -p "$RUNNER_TEMP/result"
+          find out -maxdepth 6 -name 'kernel.macho' -exec cp {} "$RUNNER_TEMP/result/" \;
+          find out -maxdepth 6 -name '*.log' -exec cp {} "$RUNNER_TEMP/result/" \;
+          ls -la "$RUNNER_TEMP/result" | head -n 40
+          df -h "$GITHUB_WORKSPACE"
+        working-directory: unixnu
+
+      - name: Upload the kernel and the logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuxi-kernel-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/result/*
+          if-no-files-found: warn
+          retention-days: 3
+
+      - name: Summary
+        if: always()
+        env:
+          KERNEL: ${{ steps.kernel.outcome }}
+        run: |
+          {
+            echo "## fuxi kernel: ${DEFCONFIG} (${STEPS})"
+            echo
+            echo "kernel step: ${KERNEL:-unknown}"
+            ls -la "$RUNNER_TEMP/result" 2>/dev/null || true
+          } >> "$GITHUB_STEP_SUMMARY"
+        working-directory: unixnu
