@@ -358,6 +358,12 @@ jobs:
         timeout-minutes: 200
         run: ./unixnu build "$STEPS"
         working-directory: unixnu
+        env:
+          # scripts/prepare-xnu-source.py reaches api.github.com for the DriverKit and
+          # TrustCache headers. Anonymous calls share a per-address quota that hosted
+          # runners exhaust (HTTP 403 rate limit exceeded), so authenticate.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Collect the results
         if: always()
