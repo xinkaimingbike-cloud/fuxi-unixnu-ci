@@ -62,7 +62,7 @@ jobs:
           grep -n 'Ath12kWifi' device/board.toml
 
       - name: Install host tools
-        timeout-minutes: 40
+        timeout-minutes: 300
         run: |
           set -x
           date -u
@@ -72,7 +72,7 @@ jobs:
             pkg-config libssl-dev device-tree-compiler mtools bzip2 zip
           date -u
           python3 scripts/linux/setup-toolchain.py --print-packages || true
-          timeout 1800 sudo python3 scripts/linux/setup-toolchain.py
+          timeout 10800 sudo python3 scripts/linux/setup-toolchain.py
           date -u
           du -sh /opt/unixnu-linux 2>/dev/null || true
         working-directory: unixnu
