@@ -179,33 +179,6 @@ jobs:
       # refer/xnu must stay a symbolic link: tree.assemble unlinks every entry under
       # refer/ on each build, so a real directory there aborts the next assemble with
       # IsADirectoryError.
-      - name: Pin the XNU reference revision
-        env:
-          UNIXNU_XNU_TAG: xnu-10063.141.1
-          UNIXNU_XNU_COMMIT: d8b80295118ef25ac3a784134bcf95cd8e88109f
-          UNIXNU_XNU_VERSION: 10063.141.1
-        run: |
-          set -eux
-          FEED=$(ls -d out/fuxi/feeds/xnu-* 2>/dev/null | head -n1 || true)
-          if [ -z "$FEED" ]; then
-            FEED=out/fuxi/feeds/xnu-${UNIXNU_XNU_COMMIT:0:8}
-          fi
-          if [ "$(git -C "$FEED" rev-parse HEAD 2>/dev/null || true)" != "$UNIXNU_XNU_COMMIT" ]; then
-            # The feed checkout is a blobless sparse clone; replace it outright so the
-            # whole working tree is present at the qualified tag.
-            rm -rf "$FEED"
-            git clone -q --depth 1 --branch "$UNIXNU_XNU_TAG" \
-              https://github.com/apple-oss-distributions/xnu.git "$FEED"
-          fi
-          test "$(git -C "$FEED" rev-parse HEAD)" = "$UNIXNU_XNU_COMMIT"
-          FEED=$(cd "$FEED" && pwd)
-          XNU=out/fuxi/tree/refer/xnu
-          if [ -e "$XNU" ] && [ ! -L "$XNU" ]; then rm -rf "$XNU"; fi
-          mkdir -p "$(dirname "$XNU")"
-          ln -sfn "$FEED" "$XNU"
-          test -L "$XNU"
-          git -C "$XNU" rev-parse HEAD
-        working-directory: unixnu
 
       # The feeds are ~2 GiB; shipping them beats cloning them again in the kernel job.
       - name: Pack the fetched sources
@@ -369,31 +342,6 @@ jobs:
 
       # Same pin as in prepare, because the driver may re-link refer/xnu from the feeds.
       # Feed first, link second: assemble recreates the symlink on every build.
-      - name: Pin the XNU reference revision
-        env:
-          UNIXNU_XNU_TAG: xnu-10063.141.1
-          UNIXNU_XNU_COMMIT: d8b80295118ef25ac3a784134bcf95cd8e88109f
-          UNIXNU_XNU_VERSION: 10063.141.1
-        run: |
-          set -eux
-          FEED=$(ls -d out/fuxi/feeds/xnu-* 2>/dev/null | head -n1 || true)
-          if [ -z "$FEED" ]; then
-            FEED=out/fuxi/feeds/xnu-${UNIXNU_XNU_COMMIT:0:8}
-          fi
-          if [ "$(git -C "$FEED" rev-parse HEAD 2>/dev/null || true)" != "$UNIXNU_XNU_COMMIT" ]; then
-            rm -rf "$FEED"
-            git clone -q --depth 1 --branch "$UNIXNU_XNU_TAG" \
-              https://github.com/apple-oss-distributions/xnu.git "$FEED"
-          fi
-          test "$(git -C "$FEED" rev-parse HEAD)" = "$UNIXNU_XNU_COMMIT"
-          FEED=$(cd "$FEED" && pwd)
-          XNU=out/fuxi/tree/refer/xnu
-          if [ -e "$XNU" ] && [ ! -L "$XNU" ]; then rm -rf "$XNU"; fi
-          mkdir -p "$(dirname "$XNU")"
-          ln -sfn "$FEED" "$XNU"
-          test -L "$XNU"
-          git -C "$XNU" rev-parse HEAD
-        working-directory: unixnu
 
       - name: Build kernel
         timeout-minutes: 200
