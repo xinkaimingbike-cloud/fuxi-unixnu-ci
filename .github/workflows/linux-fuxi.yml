@@ -61,6 +61,20 @@ jobs:
           test -f "device/configs/$DEFCONFIG"
           grep -n 'Ath12kWifi' device/board.toml
 
+      # unixnu fetch runs git submodule inside the device repository as well, so the
+      # unpacked tree has to be a git checkout with a first commit.
+      - name: Initialise the device repository
+        run: |
+          cd device
+          git init -q
+          git config user.email ci@localhost
+          git config user.name ci
+          git config commit.gpgsign false
+          git add -A
+          git commit -qm "fuxi device tree"
+          git log --oneline -1
+          test ! -f .gitmodules
+
       - name: Install host tools
         timeout-minutes: 300
         run: |
