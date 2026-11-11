@@ -337,15 +337,15 @@ jobs:
       - name: Report the patch series
         run: |
           set -ux
-          git -C out/fuxi/tree/refer/xnu rev-parse HEAD
+          git -C out/fuxi/tree/refer/xnu rev-parse HEAD || true
+          ls -ld out/fuxi/tree/refer/xnu || true
           ls out/fuxi/tree/patches/xnu 2>/dev/null || true
           ls out/fuxi/tree/kits/XnuPrelink/patches 2>/dev/null || true
           for p in out/fuxi/tree/patches/xnu/*.patch; do
             echo "== $p"
             git -C out/fuxi/tree/refer/xnu apply --check "$p" 2>&1 | head -n 4 || true
           done
-        working-directory: unixnu
-
+          true
       - name: Configure
         run: ./unixnu defconfig "$DEFCONFIG" -D "$UNIXNU_DEVICE"
         working-directory: unixnu
