@@ -1,57 +1,51 @@
-name: fuxi kernel (ubuntu)
+name: fuxi kernel
+
+# Split into two jobs so a failure in Build kernel only re-runs the kernel job.
+# GitHub re-runs failed jobs only (not failed steps), so this is the only way to
+# avoid paying for the ~50 minute toolchain build again.
+#
+#   prepare : toolchain + defconfig + fetch  -> caches /opt/unixnu-linux, uploads
+#             the fetched sources as an artifact
+#   kernel  : restores both, builds, uploads kernel.macho
 
 on:
   workflow_dispatch:
     inputs:
       defconfig:
-        description: Defconfig of the device repository
+        description: 'defconfig'
         required: true
-        default: fuxi_defconfig
+        default: 'fuxi_defconfig'
       steps:
-        description: Steps to build
-        type: choice
-        options:
-          - kernel
-          - kernel payload
-        default: kernel
+        description: 'unixnu build steps'
+        required: true
+        default: 'kernel'
 
-permissions:
-  contents: read
-
-concurrency:
-  group: linux-fuxi-${{ github.ref }}-${{ inputs.defconfig }}
-  cancel-in-progress: false
-
-defaults:
-  run:
-    shell: bash
+env:
+  DEFCONFIG: ${{ inputs.defconfig }}
+  STEPS: ${{ inputs.steps }}
+  UNIXNU_DEVICE: ${{ github.workspace }}/device
 
 jobs:
-  build:
+  prepare:
     runs-on: ubuntu-24.04
     timeout-minutes: 360
-    env:
-      UNIXNU_DEVICE: ${{ github.workspace }}/device
-      DEFCONFIG: ${{ inputs.defconfig }}
-      STEPS: ${{ inputs.steps }}
     steps:
       - name: Check out UniXNU
         uses: actions/checkout@v4
         with:
           repository: UniXNU/UniXNU
-          ref: main
           path: unixnu
           submodules: false
-          persist-credentials: false
 
       - name: Check out this repository
         uses: actions/checkout@v4
         with:
           path: ci
 
-      - uses: actions/setup-python@v5
+      - name: Run actions/setup-python@v5
+        uses: actions/setup-python@v5
         with:
-          python-version: "3.13"
+          python-version: '3.13'
 
       - name: Unpack the fuxi device repository
         run: |
@@ -75,9 +69,6 @@ jobs:
           git log --oneline -1
           test ! -f .gitmodules
 
-      # The runner is a fresh machine every run, and building llvm/cctools-port from
-      # source costs ~50 minutes. Cache the finished toolchain tree so a re-run after
-      # a later-step failure only pays for the build itself.
       - name: Restore the host toolchain
         id: toolchain-cache
         uses: actions/cache@v4
@@ -90,19 +81,15 @@ jobs:
         timeout-minutes: 300
         run: |
           set -x
-          date -u
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             build-essential git make cmake ninja-build unifdef lz4 xz-utils \
             pkg-config libssl-dev device-tree-compiler mtools bzip2 zip
-          date -u
           python3 scripts/linux/setup-toolchain.py --print-packages || true
           timeout 10800 sudo python3 scripts/linux/setup-toolchain.py
-          date -u
           du -sh /opt/unixnu-linux 2>/dev/null || true
         working-directory: unixnu
 
-      # The apt packages are not cached, so the restored toolchain still needs them.
       - name: Install the small apt packages
         run: |
           sudo apt-get update
@@ -114,12 +101,11 @@ jobs:
         run: |
           uname -a
           python3 --version
-          for tool in git make clang cmake ninja unifdef ld lzfse dtc; do
-            printf '%-10s %s\n' "$tool" "$(command -v "$tool" || echo MISSING)"
+          for t in git make clang cmake ninja unifdef ld lzfse dtc; do
+            printf '%-8s %s\n' "$t" "$(command -v "$t" || echo MISSING)"
           done
-          ls -la /opt/unixnu-linux 2>/dev/null | head -n 20
-          df -h "$GITHUB_WORKSPACE"
-        working-directory: unixnu
+          ls /opt/unixnu-linux
+          df -h /
 
       - name: Configure
         run: ./unixnu defconfig "$DEFCONFIG" -D "$UNIXNU_DEVICE"
@@ -127,23 +113,106 @@ jobs:
 
       - name: Fetch the sources
         env:
-          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: ./unixnu fetch
         working-directory: unixnu
 
+      # The feeds are ~2 GiB; shipping them beats cloning them again in the kernel job.
+      - name: Pack the fetched sources
+        run: |
+          cd unixnu
+          tar -cJf "$RUNNER_TEMP/unixnu-out.tar.xz" out
+          ls -lh "$RUNNER_TEMP/unixnu-out.tar.xz"
+          df -h /
+
+      - name: Upload the prepared tree
+        uses: actions/upload-artifact@v4
+        with:
+          name: unixnu-prepared-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/unixnu-out.tar.xz
+          retention-days: 3
+
+  kernel:
+    needs: prepare
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    steps:
+      - name: Check out UniXNU
+        uses: actions/checkout@v4
+        with:
+          repository: UniXNU/UniXNU
+          path: unixnu
+          submodules: false
+
+      - name: Check out this repository
+        uses: actions/checkout@v4
+        with:
+          path: ci
+
+      - name: Run actions/setup-python@v5
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Restore the host toolchain
+        uses: actions/cache@v4
+        with:
+          path: /opt/unixnu-linux
+          key: unixnu-linux-${{ runner.os }}-${{ hashFiles('unixnu/scripts/linux/setup-toolchain.py') }}
+
+      - name: Install the small apt packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential git make cmake ninja-build unifdef lz4 xz-utils \
+            pkg-config libssl-dev device-tree-compiler mtools bzip2 zip
+
+      - name: Unpack the fuxi device repository
+        run: |
+          tar -xzf ci/device-fuxi.tar.gz
+          test -f device/board.toml
+          test -f "device/configs/$DEFCONFIG"
+          grep -n 'Ath12kWifi' device/board.toml
+
+      - name: Initialise the device repository
+        run: |
+          cd device
+          git init -q
+          git config user.email ci@localhost
+          git config user.name ci
+          git config commit.gpgsign false
+          git add -A
+          git commit -qm "fuxi device tree"
+          test ! -f .gitmodules
+
+      - name: Download the prepared tree
+        uses: actions/download-artifact@v4
+        with:
+          name: unixnu-prepared-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/prepared
+
+      - name: Restore the fetched sources
+        run: |
+          cd unixnu
+          tar -xJf "$RUNNER_TEMP/prepared/unixnu-out.tar.xz"
+          ls out | head -n 20
+          df -h /
+
+      - name: Configure
+        run: ./unixnu defconfig "$DEFCONFIG" -D "$UNIXNU_DEVICE"
+        working-directory: unixnu
+
       - name: Build kernel
-        id: kernel
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-        run: ./unixnu build kernel
+        timeout-minutes: 200
+        run: ./unixnu build "$STEPS"
         working-directory: unixnu
 
       - name: Collect the results
         if: always()
         run: |
           mkdir -p "$RUNNER_TEMP/result"
-          find out -maxdepth 6 -name 'kernel.macho' -exec cp {} "$RUNNER_TEMP/result/" \;
-          find out -maxdepth 6 -name '*.log' -exec cp {} "$RUNNER_TEMP/result/" \;
+          find out -maxdepth 6 -name 'kernel.macho' -exec cp {} "$RUNNER_TEMP/result/" \; || true
+          find out -maxdepth 6 -name '*.log' -exec cp {} "$RUNNER_TEMP/result/" \; || true
           ls -la "$RUNNER_TEMP/result" | head -n 40
           df -h "$GITHUB_WORKSPACE"
         working-directory: unixnu
@@ -154,18 +223,12 @@ jobs:
         with:
           name: fuxi-kernel-${{ github.run_attempt }}
           path: ${{ runner.temp }}/result/*
-          if-no-files-found: warn
           retention-days: 3
+          if-no-files-found: warn
 
       - name: Summary
         if: always()
-        env:
-          KERNEL: ${{ steps.kernel.outcome }}
         run: |
-          {
-            echo "## fuxi kernel: ${DEFCONFIG} (${STEPS})"
-            echo
-            echo "kernel step: ${KERNEL:-unknown}"
-            ls -la "$RUNNER_TEMP/result" 2>/dev/null || true
-          } >> "$GITHUB_STEP_SUMMARY"
-        working-directory: unixnu
+          echo "defconfig: $DEFCONFIG" >> "$GITHUB_STEP_SUMMARY"
+          echo "steps: $STEPS" >> "$GITHUB_STEP_SUMMARY"
+          du -sh "$RUNNER_TEMP/result" 2>/dev/null || true
