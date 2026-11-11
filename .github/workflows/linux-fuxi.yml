@@ -76,18 +76,21 @@ jobs:
           path: /opt/unixnu-linux
           key: unixnu-linux-${{ runner.os }}-${{ hashFiles('unixnu/scripts/linux/setup-toolchain.py') }}
 
+      # Runs on a cache hit as well: the installer is idempotent, and it also drops
+      # /usr/bin/xcrun and the CLT shims into system paths the cache cannot hold --
+      # scripts/unixnu/kernel.py refuses to build when /usr/bin/xcrun is absent.
       - name: Install host tools
-        if: steps.toolchain-cache.outputs.cache-hit != 'true'
         timeout-minutes: 300
         run: |
           set -x
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             build-essential git make cmake ninja-build unifdef lz4 xz-utils \
-            pkg-config libssl-dev device-tree-compiler mtools bzip2 zip
+            pkg-config libssl-dev device-tree-compiler mtools bzip2 zip llvm
           python3 scripts/linux/setup-toolchain.py --print-packages || true
           timeout 10800 sudo python3 scripts/linux/setup-toolchain.py
           du -sh /opt/unixnu-linux 2>/dev/null || true
+          ls -l /usr/bin/xcrun 2>/dev/null || true
         working-directory: unixnu
 
       - name: Install the small apt packages
@@ -131,6 +134,7 @@ jobs:
           exit 1
           EOF
           sudo chmod +x /usr/local/bin/xcrun /usr/local/bin/brew
+          if [ ! -e /usr/bin/xcrun ]; then sudo cp /usr/local/bin/xcrun /usr/bin/xcrun; fi
           if [ -d /opt/unixnu-linux/bin ]; then
             for f in /opt/unixnu-linux/bin/*; do
               sudo ln -sf "$f" "/usr/local/bin/$(basename "$f")"
@@ -253,6 +257,18 @@ jobs:
             build-essential git make cmake ninja-build unifdef lz4 xz-utils \
             pkg-config libssl-dev device-tree-compiler mtools bzip2 zip llvm
 
+      # /opt/unixnu-linux comes from the cache, but /usr/bin/xcrun and the CLT shims
+      # live outside it; kernel.py requires them, so the idempotent installer runs
+      # here too (a few seconds when the cached toolchain is already present).
+      - name: Ensure the host toolchain entries
+        timeout-minutes: 60
+        run: |
+          set -x
+          timeout 3600 sudo python3 scripts/linux/setup-toolchain.py || true
+          ls -l /usr/bin/xcrun || true
+          ls -l "$UNIXNU_TOOLCHAIN/bin/lzfse" 2>/dev/null || true
+        working-directory: unixnu
+
       - name: Provide the Linux stand-ins for xcrun and Homebrew
         run: |
           sudo tee /usr/local/bin/xcrun >/dev/null <<'EOF'
@@ -284,6 +300,7 @@ jobs:
           exit 1
           EOF
           sudo chmod +x /usr/local/bin/xcrun /usr/local/bin/brew
+          if [ ! -e /usr/bin/xcrun ]; then sudo cp /usr/local/bin/xcrun /usr/bin/xcrun; fi
           if [ -d /opt/unixnu-linux/bin ]; then
             for f in /opt/unixnu-linux/bin/*; do
               sudo ln -sf "$f" "/usr/local/bin/$(basename "$f")"
