@@ -347,6 +347,39 @@ jobs:
             git -C out/fuxi/tree/refer/xnu apply --check "$p" 2>&1 | head -n 4 || true
           done
           true
+      # The pinned libdispatch is newer than the pinned xnu: its kernel firehose header
+      # references firehose_stream_metric, while xnu-10063's enum stops at
+      # firehose_stream_memory_baseband. Add the missing member to both copies of the
+      # enum so the source compiles and the two sides agree on the stream numbering.
+      - name: Align the firehose stream enum
+        if: always()
+        run: |
+          set -eux
+          python3 - <<'PY'
+          import re
+          from pathlib import Path
+          targets = [
+              Path('out/fuxi/tree/.cache/fakeroot/usr/local/include/firehose/firehose_types_private.h'),
+              Path('out/fuxi/tree/.cache/xnu-work/libkern/firehose/firehose_types_private.h'),
+          ]
+          member = '    firehose_stream_metric                      = 7,\n'
+          for path in targets:
+              if not path.is_file():
+                  print('missing', path)
+                  continue
+              text = path.read_text()
+              if 'firehose_stream_metric' in text:
+                  print('already present', path)
+                  continue
+              text, count = re.subn(r'(firehose_stream_memory_baseband\s*=\s*6,\n)',
+                                    r'\1' + member, text, count=1)
+              if count:
+                  path.write_text(text)
+                  print('patched', path)
+              else:
+                  print('pattern not found', path)
+          PY
+        working-directory: unixnu
       - name: Configure
         run: ./unixnu defconfig "$DEFCONFIG" -D "$UNIXNU_DEVICE"
         working-directory: unixnu
