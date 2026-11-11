@@ -117,6 +117,26 @@ jobs:
         run: ./unixnu fetch
         working-directory: unixnu
 
+      # The sm8550 feed resolves XNU to a newer revision (ac9718fb) than the one the
+      # port's patch series is qualified for: scripts/build-xnu-4k-baseline.sh exits
+      # with "unexpected XNU reference revision" unless refer/xnu is xnu-10063.141.1
+      # (d8b8029). unixnu.lock only records the feed commit and is rewritten by fetch,
+      # so the checkout has to be pinned here, after the fetch.
+      - name: Pin the XNU reference revision
+        env:
+          UNIXNU_XNU_TAG: xnu-10063.141.1
+          UNIXNU_XNU_COMMIT: d8b80295118ef25ac3a784134bcf95cd8e88109f
+          UNIXNU_XNU_VERSION: 10063.141.1
+        run: |
+          XNU=out/fuxi/tree/refer/xnu
+          if [ -e "$XNU" ] || [ -L "$XNU" ]; then rm -rf "$XNU"; fi
+          mkdir -p "$(dirname "$XNU")"
+          git clone -q --depth 1 --branch "$UNIXNU_XNU_TAG" \
+            https://github.com/apple-oss-distributions/xnu.git "$XNU"
+          test "$(git -C "$XNU" rev-parse HEAD)" = "$UNIXNU_XNU_COMMIT"
+          git -C "$XNU" rev-parse HEAD
+        working-directory: unixnu
+
       # The feeds are ~2 GiB; shipping them beats cloning them again in the kernel job.
       - name: Pack the fetched sources
         run: |
@@ -200,6 +220,24 @@ jobs:
 
       - name: Configure
         run: ./unixnu defconfig "$DEFCONFIG" -D "$UNIXNU_DEVICE"
+        working-directory: unixnu
+
+      # Same pin as in prepare, because the driver may re-link refer/xnu from the feeds.
+      - name: Pin the XNU reference revision
+        env:
+          UNIXNU_XNU_TAG: xnu-10063.141.1
+          UNIXNU_XNU_COMMIT: d8b80295118ef25ac3a784134bcf95cd8e88109f
+          UNIXNU_XNU_VERSION: 10063.141.1
+        run: |
+          XNU=out/fuxi/tree/refer/xnu
+          if [ "$(git -C "$XNU" rev-parse HEAD 2>/dev/null || true)" != "$UNIXNU_XNU_COMMIT" ]; then
+            rm -rf "$XNU"
+            mkdir -p "$(dirname "$XNU")"
+            git clone -q --depth 1 --branch "$UNIXNU_XNU_TAG" \
+              https://github.com/apple-oss-distributions/xnu.git "$XNU"
+          fi
+          test "$(git -C "$XNU" rev-parse HEAD)" = "$UNIXNU_XNU_COMMIT"
+          git -C "$XNU" rev-parse HEAD
         working-directory: unixnu
 
       - name: Build kernel
